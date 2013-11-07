@@ -1,19 +1,33 @@
 <?php
 /**
- * @method Object Oriented PHP SDK for Infusionsoft
+ * @method Object Oriented PHP SDK with OAuth2 Support for Infusionsoft
  * @CreatedBy Justin Morris on 09-10-08
  * @UpdatedBy Michael Fairchild
- * @Updated 10/26/2013
- * @iSDKVersion 1.8.5
+ * @Updated 11/06/13
+ * @iSDKVersion 2.0.5
  * @ApplicationVersion 1.29.x
  */
 
 if (!function_exists('xmlrpc_encode_entitites')) {
-    include("xmlrpc-3.0/lib/xmlrpc.inc");
+    include("xmlrpc.inc");
 }
 class iSDKException extends Exception
 {
 }
+
+require('Client.php');
+require('GrantType/IGrantType.php');
+require('GrantType/AuthorizationCode.php');
+
+const CLIENT_ID = 'YOURAPIKEYHERE';
+const CLIENT_SECRET = null;
+
+const REDIRECT_URI = 'YOURCALLBACKURL'; //Note: This MUST be HTTPS and same as registered cllback url
+const AUTHORIZATION_ENDPOINT = 'https://signin.infusionsoft.com/app/oauth/authorize';
+const TOKEN_ENDPOINT = 'https://api.infusionsoft.com/token';
+const POST_URL = 'https://api.infusionsoft.com/crm/xmlrpc/v1';
+
+$oauth = new OAuth2\Client(CLIENT_ID, CLIENT_SECRET);
 
 class iSDK
 {
@@ -21,6 +35,57 @@ class iSDK
     static private $handle;
     public $logname = '';
     public $loggingEnabled = 0;
+
+    public function __construct()
+    {
+        $this->debug = "off";
+    }
+
+    public function getAuthorizationURL()
+    {
+        global $oauth;
+        return $oauth->getAuthenticationUrl(AUTHORIZATION_ENDPOINT, REDIRECT_URI, array('scope' => 'full'));
+    }
+
+    public function getAccessToken()
+    {
+        global $oauth;
+        if (!file_exists((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) .'/key')) {
+            $params = array('code' => $_GET['code'], 'redirect_uri' => REDIRECT_URI);
+            $response = $oauth->getAccessToken(TOKEN_ENDPOINT, 'authorization_code', $params);
+            $token = $response['result']['access_token'];
+            $oauth->setAccessToken($token);
+            $this->encKey = php_xmlrpc_encode($token);
+            $this->client = new xmlrpc_client(POST_URL . '?access_token=' . $token);
+            $this->client->return_type = "phpvals";
+            $this->client->setSSLVerifyPeer(TRUE);
+            $this->client->setCaCertificate((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/infusionsoftoauth.pem');
+            $handle = fopen((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/key', 'w') or die('Cannot open key file');
+            fwrite($handle, $token);
+            $this->client->setDebug(0);
+            return $token;
+        } else {
+            $handle = fopen((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/key', 'r') or die('Cannot open key file');
+            $token = fread($handle,filesize((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) .'/key'));
+            $this->setAccessToken($token);
+            $this->client->setDebug(0);
+            return $token;
+        }
+    }
+
+    public function setAccessToken($token)
+    {
+        global $oauth;
+        $oauth->setAccessToken($token);
+        $this->encKey = php_xmlrpc_encode($token);
+        $this->client = new xmlrpc_client(POST_URL . '?access_token=' . $token);
+        $this->client->return_type = "phpvals";
+        $this->client->return_type = "phpvals";
+        $this->client->setSSLVerifyPeer(TRUE);
+        $this->client->setCaCertificate((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/infusionsoftoauth.pem');
+        $this->client->setDebug(0);
+        return $token;
+    }
 
     /**
      * @method cfgCon
@@ -32,6 +97,7 @@ class iSDK
      * @return bool
      * @throws iSDKException
      */
+
     public function cfgCon($name, $key = "", $dbOn = "on", $type = "i")
     {
         $this->debug = (($key == 'on' || $key == 'off' || $key == 'kill' || $key == 'throw') ? $key : $dbOn);
@@ -51,14 +117,14 @@ class iSDK
 
         switch ($type) {
             case 'm':
-                $this->client = new xmlrpc_client("https://$appname.mortgageprocrm.com/api/xmlrpc");
+                $this->client = new xmlrpc_client("https://{$appname}.mortgageprocrm.com/api/xmlrpc");
                 break;
             case 'i':
             default:
                 if (!isset($appname)) {
                     $appname = $name;
                 }
-                $this->client = new xmlrpc_client("https://$appname.infusionsoft.com/api/xmlrpc");
+                $this->client = new xmlrpc_client("https://{$appname}.infusionsoft.com/api/xmlrpc");
                 break;
         }
 
@@ -68,95 +134,17 @@ class iSDK
         /* SSL Certificate Verification */
         $this->client->setSSLVerifyPeer(TRUE);
         $this->client->setCaCertificate((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/infusionsoft.pem');
-        //$this->client->setDebug(2);
+        $this->client->setDebug(0);
 
         $this->encKey = php_xmlrpc_encode($this->key);
 
         /* Connection verification */
-
-        try{
-            $connected = $this->dsGetSetting("Application","enabled");
-
-            if(strpos($connected, 'ERROR') !== FALSE){
-                throw new iSDKException($connected);
-            }
-
-        }catch (iSDKException $e){
-            throw new iSDKException($e->getMessage());
-        }
-
-        return true;
-    }
-
-    /**
-     * @method getTemporaryKey
-     * @description Connect and Obtain an API key from a vendor key
-     * @param string $name - Application Name
-     * @param string $user - Username
-     * @param string $pass - Password
-     * @param string $key - Vendor Key
-     * @param string $dbOn - Error Handling On
-     * @param string $type - Infusionsoft or Mortgage Pro
-     * @return bool
-     * @throws iSDKException
-     */
-    public function vendorCon($name, $user, $pass, $key = "", $dbOn = "on", $type = "i")
-    {
-        $this->debug = (($key == 'on' || $key == 'off' || $key == 'kill' || $key == 'throw') ? $key : $dbOn);
-
-        if ($key != "" && $key != "on" && $key != "off" && $key != 'kill' && $key != 'throw') {
-            if ($type == "i") {
-                $this->client = new xmlrpc_client("https://$name.infusionsoft.com/api/xmlrpc");
-            } else if ($type == "m") {
-                $this->client = new xmlrpc_client("https://$name.mortgageprocrm.com/api/xmlrpc");
-            } else {
-                throw new iSDKException ("Invalid application type: \"$name\"");
-            }
-            $this->key = $key;
-        } else {
-            include('conn.cfg.php');
-            $appLines = $connInfo;
-            foreach ($appLines as $appLine) {
-                $details[substr($appLine, 0, strpos($appLine, ":"))] = explode(":", $appLine);
-            }
-            if (!empty($details[$name])) {
-                if ($details[$name][2] == "i") {
-                    $this->client = new xmlrpc_client("https://" . $details[$name][1] .
-                        ".infusionsoft.com/api/xmlrpc");
-                } elseif ($details[$name][2] == "m") {
-                    $this->client = new xmlrpc_client("https://" . $details[$name][1] .
-                        ".mortgageprocrm.com/api/xmlrpc");
-                } else {
-                    throw new iSDKException("Invalid application name: \"" . $name . "\"");
-                }
-            } else {
-                throw new iSDKException("Application Does Not Exist: \"" . $name . "\"");
-            }
-            $this->key = $details[$name][3];
-        }
-
-        /* Return Raw PHP Types */
-        $this->client->return_type = "phpvals";
-
-        /* SSL Certificate Verification */
-        $this->client->setSSLVerifyPeer(TRUE);
-        $this->client->setCaCertificate((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/infusionsoft.pem');
-
-        $carray = array(
-            php_xmlrpc_encode($this->key),
-            php_xmlrpc_encode($user),
-            php_xmlrpc_encode(md5($pass)));
-
-        $this->key = $this->methodCaller("DataService.getTemporaryKey", $carray);
-
-        $this->encKey = php_xmlrpc_encode($this->key);
-
         try {
             $connected = $this->dsGetSetting("Application", "enabled");
         } catch (iSDKException $e) {
             throw new iSDKException("Connection Failed");
         }
-        return TRUE;
+        return true;
     }
 
     /**
@@ -183,14 +171,15 @@ class iSDK
      */
     public function methodCaller($service, $callArray)
     {
+        echo "<pre>";
+        //print_r($callArray);
+        echo "</pre>";
 
         /* Set up the call */
         $call = new xmlrpcmsg($service, $callArray);
-
         if ($service != 'DataService.getTemporaryKey') {
             array_unshift($call->params, $this->encKey);
         }
-
         /* Send the call */
         $now = time();
         $start = microtime();
@@ -2054,22 +2043,16 @@ class iSDK
      * @method infuDate
      * @description returns properly formatted dates.
      * @param $dateStr
-     * @param $dateFrmt - Optional date format for UK formatted Applications
      * @return bool|string
      */
-    public function infuDate($dateStr, $dateFrmt = 'US')
+    public function infuDate($dateStr)
     {
         $dArray = date_parse($dateStr);
         if ($dArray['error_count'] < 1) {
             $tStamp =
                 mktime($dArray['hour'], $dArray['minute'], $dArray['second'], $dArray['month'],
                     $dArray['day'], $dArray['year']);
-            if ($dateFrmt == 'UK') {
-                setlocale(LC_ALL, 'en_GB');
-                return date('Y-d-m\TH:i:s', $tStamp);
-            } else {
-                return date('Ymd\TH:i:s', $tStamp);
-            }
+            return date('Ymd\TH:i:s', $tStamp);
         } else {
             foreach ($dArray['errors'] as $err) {
                 echo "ERROR: " . $err . "<br />";
@@ -2125,12 +2108,18 @@ class iSDK
             $this->getHandle($logname);
         }
 
+        echo "<pre>";
+        //print_r($logdata['Call']);
+        echo "</pre>";
+        echo "<br />";
+
         if (isset($logdata['Call'][0]->me['string'])) {
             if ($logdata['Call'][0]->me['string'] == 'CreditCard') {
                 unset($logdata['Call'][1]->me['struct']);
                 $logdata['Call'][1]->me['struct'] = 'Data Removed For Security';
             }
         }
+
 
         $logdata['Call'][0]->me['string'] = 'APIKEY';
 
@@ -2524,7 +2513,6 @@ class iSDK
     public function getProductShippingPricesForProductShippingOption($optionId)
     {
         $carray = array(
-
             php_xmlrpc_encode((int)$optionId));
         return $this->methodCaller("ShippingService.getProductShippingPricesForProductShippingOption", $carray);
     }
