@@ -16,6 +16,6 @@
         "ext-curl": "*"
     },
     "autoload": {
-        "files": ["src/isdk.php"]
+        "classmap": ["src/isdk.php"]
     }
 }
