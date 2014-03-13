@@ -3,31 +3,18 @@
  * @method Object Oriented PHP SDK with OAuth2 Support for Infusionsoft
  * @CreatedBy Justin Morris on 09-10-08
  * @UpdatedBy Michael Fairchild
- * @Updated 11/06/13
- * @iSDKVersion 2.0.5
+ * @Updated 03/13/14
+ * @iSDKVersion 2.1.2
  * @ApplicationVersion 1.29.x
  */
 
 if (!function_exists('xmlrpc_encode_entitites')) {
     include("xmlrpc.inc");
 }
+
 class iSDKException extends Exception
 {
 }
-
-require('Client.php');
-require('GrantType/IGrantType.php');
-require('GrantType/AuthorizationCode.php');
-
-const CLIENT_ID = 'YOURAPIKEYHERE';
-const CLIENT_SECRET = null;
-
-const REDIRECT_URI = 'YOURCALLBACKURL'; //Note: This MUST be HTTPS and same as registered cllback url
-const AUTHORIZATION_ENDPOINT = 'https://signin.infusionsoft.com/app/oauth/authorize';
-const TOKEN_ENDPOINT = 'https://api.infusionsoft.com/token';
-const POST_URL = 'https://api.infusionsoft.com/crm/xmlrpc/v1';
-
-$oauth = new OAuth2\Client(CLIENT_ID, CLIENT_SECRET);
 
 class iSDK
 {
@@ -35,42 +22,176 @@ class iSDK
     static private $handle;
     public $logname = '';
     public $loggingEnabled = 0;
+    public $clientId;
+    public $secret;
+    protected $redirectURL;
+    protected $authEndpoint;
+    protected $tokenEndpoint;
+    protected $postURL;
+    protected $token;
 
     public function __construct()
     {
         $this->debug = "off";
+        $this->authEndpoint = 'https://signin.infusionsoft.com/app/oauth/authorize';
+        $this->tokenEndpoint = 'https://api.infusionsoft.com/token';
+        $this->postURL = 'https://api.infusionsoft.com/crm/xmlrpc/v1';
+        $this->redirectURL = 'https://localhost/PHP-iSDK/Samples/oauth2/success.php'; //Note: This MUST be HTTPS and same as registered cllback url
     }
 
     public function getAuthorizationURL()
     {
-        global $oauth;
-        return $oauth->getAuthenticationUrl(AUTHORIZATION_ENDPOINT, REDIRECT_URI, array('scope' => 'full'));
+        $params = array(
+            'response_type' => 'code',
+            'client_id' => $this->clientId,
+            'redirect_uri' => $this->redirectURL,
+            'scope' => 'full'
+        );
+        return $this->authEndpoint . '?' . http_build_query($params);
     }
 
-    public function getAccessToken()
+    public function setSecret($secret = null)
     {
-        global $oauth;
-        if (!file_exists((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) .'/key')) {
-            $params = array('code' => $_GET['code'], 'redirect_uri' => REDIRECT_URI);
-            $response = $oauth->getAccessToken(TOKEN_ENDPOINT, 'authorization_code', $params);
-            $token = $response['result']['access_token'];
-            $oauth->setAccessToken($token);
+        if (!is_null($secret)) {
+            $this->secret = $secret;
+        } else {
+            return $this->secret;
+        }
+    }
+
+    public function setClientId($id = null)
+    {
+        if (!is_null($id)) {
+            $this->clientId = $id;
+        } else {
+            return $this->clientId;
+        }
+    }
+
+    public function setToken($token = null)
+    {
+        if (!is_null($token)) {
+            $this->token = $token;
             $this->encKey = php_xmlrpc_encode($token);
-            $this->client = new xmlrpc_client(POST_URL . '?access_token=' . $token);
+            $this->client = new xmlrpc_client($this->postURL . '?access_token=' . $token);
             $this->client->return_type = "phpvals";
             $this->client->setSSLVerifyPeer(TRUE);
             $this->client->setCaCertificate((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/infusionsoftoauth.pem');
-            $handle = fopen((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/key', 'w') or die('Cannot open key file');
-            fwrite($handle, $token);
             $this->client->setDebug(0);
-            return $token;
         } else {
-            $handle = fopen((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/key', 'r') or die('Cannot open key file');
-            $token = fread($handle,filesize((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) .'/key'));
-            $this->setAccessToken($token);
-            $this->client->setDebug(0);
-            return $token;
+            return $this->token;
         }
+    }
+
+    public function setRedirectURL($url = null)
+    {
+        if (!is_null($url)) {
+            $this->redirectURL = $url;
+        } else {
+            return $this->redirectURL;
+        }
+    }
+
+    public function setAuthEndpoint($url = null)
+    {
+        if (!is_null($url)) {
+            $this->authEndpoint = $url;
+        } else {
+            return $this->authEndpoint;
+        }
+    }
+
+    public function setTokenEndpoint($url = null)
+    {
+        if (!is_null($url)) {
+            $this->tokenEndpoint = $url;
+        } else {
+            return $this->tokenEndpoint;
+        }
+    }
+
+    public function setPostURL($url = null)
+    {
+        if (!is_null($url)) {
+            $this->postURL = $url;
+        } else {
+            return $this->postURL;
+        }
+    }
+
+    public function authorize($code, $redirectURL = null, $clientId = null, $clientSecret = null, $grantType = 'authorization_code')
+    {
+
+        $params = array(
+            'code' => $code,
+            'redirect_uri' => (!is_null($redirectURL) ? $redirectURL : $this->redirectURL),
+            'grant_type' => $grantType,
+            'client_id' => (!is_null($clientId) ? $clientId : $this->clientId),
+            'client_secret' => (!is_null($clientSecret) ? $clientSecret : $this->secret)
+        );
+
+        $request = $this->exchangeToken($params);
+
+        $data = $request['data'];
+
+        if ($request['info']['http_code'] == 200) {
+
+            if ($data->mapi == $this->clientId) {
+                $tmp = explode('|', $data->scope);
+                $app = explode('.', $tmp[1]);
+
+                $data->applicationName = $app[0];
+                $this->setToken($data->access_token);
+                return $data;
+            } else {
+                throw new Exception('Invalid Map.', 400);
+            }
+        } else {
+            switch (true) {
+                case is_object($data) && isset($data->error_description):
+                    $message = $data->error_description;
+                    break;
+
+                case is_object($data) && !isset($data->error_description) && isset($data->error):
+                    $message = ucwords(str_ireplace('_', ' ', $data->error));
+                    break;
+
+                default:
+                    $message = 'An error has occurred.';
+                    break;
+            }
+
+            throw new Exception($message, $request['info']['http_code']);
+        }
+
+    }
+
+    protected function exchangeToken($params)
+    {
+        $handle = curl_init($this->tokenEndpoint);
+
+        curl_setopt($handle, CURLOPT_POST, true);
+        curl_setopt($handle, CURLOPT_POSTFIELDS, http_build_query($params));
+        curl_setopt($handle, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($handle, CURLOPT_CAINFO, (__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/infusionsoftoauth.pem');
+
+        $request = curl_exec($handle);
+        $info = curl_getinfo($handle);
+
+        curl_close($handle);
+
+        if (stripos($info['content_type'], 'application/json') !== false) {
+            $data = json_decode(trim($request));
+        } else {
+            $data = $request;
+        }
+
+        $page = array(
+            'data' => $data,
+            'info' => $info
+        );
+
+        return $page;
     }
 
     public function setAccessToken($token)
@@ -79,7 +200,6 @@ class iSDK
         $oauth->setAccessToken($token);
         $this->encKey = php_xmlrpc_encode($token);
         $this->client = new xmlrpc_client(POST_URL . '?access_token=' . $token);
-        $this->client->return_type = "phpvals";
         $this->client->return_type = "phpvals";
         $this->client->setSSLVerifyPeer(TRUE);
         $this->client->setCaCertificate((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/infusionsoftoauth.pem');
@@ -98,7 +218,8 @@ class iSDK
      * @throws iSDKException
      */
 
-    public function cfgCon($name, $key = "", $dbOn = "on", $type = "i")
+    public
+    function cfgCon($name, $key = "", $dbOn = "on", $type = "i")
     {
         $this->debug = (($key == 'on' || $key == 'off' || $key == 'kill' || $key == 'throw') ? $key : $dbOn);
 
@@ -153,7 +274,8 @@ class iSDK
      * @param string $txt
      * @return int|mixed|string
      */
-    public function appEcho($txt)
+    public
+    function appEcho($txt)
     {
         $carray = array(
             php_xmlrpc_encode($txt));
@@ -169,12 +291,9 @@ class iSDK
      * @return int|mixed|string
      * @throws iSDKException
      */
-    public function methodCaller($service, $callArray)
+    public
+    function methodCaller($service, $callArray)
     {
-        echo "<pre>";
-        //print_r($callArray);
-        echo "</pre>";
-
         /* Set up the call */
         $call = new xmlrpcmsg($service, $callArray);
         if ($service != 'DataService.getTemporaryKey') {
@@ -221,7 +340,8 @@ class iSDK
      * @param int $programId
      * @return array
      */
-    public function getAffiliatesByProgram($programId)
+    public
+    function getAffiliatesByProgram($programId)
     {
         $carray = array(
             php_xmlrpc_encode((int)$programId));
@@ -234,7 +354,8 @@ class iSDK
      * @param int $affiliateId
      * @return array
      */
-    public function getProgramsForAffiliate($affiliateId)
+    public
+    function getProgramsForAffiliate($affiliateId)
     {
         $carray = array(
 
@@ -247,7 +368,8 @@ class iSDK
      * @description Gets a list of all of the Affiliate Programs that are in the application.
      * @return int|mixed|string
      */
-    public function getAffiliatePrograms()
+    public
+    function getAffiliatePrograms()
     {
         $carray = array();
         return $this->methodCaller("AffiliateProgramService.getAffiliatePrograms", $carray);
@@ -259,7 +381,8 @@ class iSDK
      * @param int $programId
      * @return array
      */
-    public function getResourcesForAffiliateProgram($programId)
+    public
+    function getResourcesForAffiliateProgram($programId)
     {
         $carray = array(
 
@@ -279,7 +402,8 @@ class iSDK
      * @param date $endDate
      * @return array
      */
-    public function affClawbacks($affId, $startDate, $endDate)
+    public
+    function affClawbacks($affId, $startDate, $endDate)
     {
         $carray = array(
 
@@ -297,7 +421,8 @@ class iSDK
      * @param date $endDate
      * @return array
      */
-    public function affCommissions($affId, $startDate, $endDate)
+    public
+    function affCommissions($affId, $startDate, $endDate)
     {
         $carray = array(
 
@@ -315,7 +440,8 @@ class iSDK
      * @param date $endDate
      * @return array
      */
-    public function affPayouts($affId, $startDate, $endDate)
+    public
+    function affPayouts($affId, $startDate, $endDate)
     {
         $carray = array(
 
@@ -331,7 +457,8 @@ class iSDK
      * @param array $affList
      * @return array
      */
-    public function affRunningTotals($affList)
+    public
+    function affRunningTotals($affList)
     {
         $carray = array(
 
@@ -347,7 +474,8 @@ class iSDK
      * @param date $endDate
      * @return array
      */
-    public function affSummary($affList, $startDate, $endDate)
+    public
+    function affSummary($affList, $startDate, $endDate)
     {
         $carray = array(
 
@@ -363,7 +491,8 @@ class iSDK
      * @param $affiliateId
      * @return int|mixed|string
      */
-    public function getRedirectLinksForAffiliate($affiliateId)
+    public
+    function getRedirectLinksForAffiliate($affiliateId)
     {
         $carray = array(
 
@@ -382,7 +511,8 @@ class iSDK
      * @param string $optReason
      * @return int
      */
-    public function addCon($cMap, $optReason = "")
+    public
+    function addCon($cMap, $optReason = "")
     {
 
         $carray = array(
@@ -406,7 +536,8 @@ class iSDK
      * @param array $cMap
      * @return int
      */
-    public function updateCon($cid, $cMap)
+    public
+    function updateCon($cid, $cMap)
     {
 
         $carray = array(
@@ -423,7 +554,8 @@ class iSDK
      * @param int $dcid
      * @return int
      */
-    public function mergeCon($cid, $dcid)
+    public
+    function mergeCon($cid, $dcid)
     {
         $carray = array(
 
@@ -440,7 +572,8 @@ class iSDK
      * @param array $fMap
      * @return array
      */
-    public function findByEmail($eml, $fMap)
+    public
+    function findByEmail($eml, $fMap)
     {
 
         $carray = array(
@@ -457,7 +590,8 @@ class iSDK
      * @param array $rFields
      * @return array
      */
-    public function loadCon($cid, $rFields)
+    public
+    function loadCon($cid, $rFields)
     {
 
         $carray = array(
@@ -474,7 +608,8 @@ class iSDK
      * @param int $gid
      * @return bool
      */
-    public function grpAssign($cid, $gid)
+    public
+    function grpAssign($cid, $gid)
     {
         $carray = array(
 
@@ -490,7 +625,8 @@ class iSDK
      * @param int $gid
      * @return bool
      */
-    public function grpRemove($cid, $gid)
+    public
+    function grpRemove($cid, $gid)
     {
         $carray = array(
 
@@ -506,7 +642,8 @@ class iSDK
      * @param int $sequenceId
      * @return bool
      */
-    public function resumeCampaignForContact($cid, $sequenceId)
+    public
+    function resumeCampaignForContact($cid, $sequenceId)
     {
         $carray = array(
 
@@ -522,7 +659,8 @@ class iSDK
      * @param int $campId
      * @return bool
      */
-    public function campAssign($cid, $campId)
+    public
+    function campAssign($cid, $campId)
     {
         $carray = array(
 
@@ -538,7 +676,8 @@ class iSDK
      * @param int $campId
      * @return array
      */
-    public function getNextCampaignStep($cid, $campId)
+    public
+    function getNextCampaignStep($cid, $campId)
     {
         $carray = array(
 
@@ -555,7 +694,8 @@ class iSDK
      * @param int $stepId
      * @return array
      */
-    public function getCampaigneeStepDetails($cid, $stepId)
+    public
+    function getCampaigneeStepDetails($cid, $stepId)
     {
         $carray = array(
 
@@ -572,7 +712,8 @@ class iSDK
      * @param int $campId
      * @return int
      */
-    public function rescheduleCampaignStep($cidList, $campId)
+    public
+    function rescheduleCampaignStep($cidList, $campId)
     {
         $carray = array(
 
@@ -589,7 +730,8 @@ class iSDK
      * @param int $campId
      * @return bool
      */
-    public function campRemove($cid, $campId)
+    public
+    function campRemove($cid, $campId)
     {
         $carray = array(
 
@@ -605,7 +747,8 @@ class iSDK
      * @param int $campId
      * @return bool
      */
-    public function campPause($cid, $campId)
+    public
+    function campPause($cid, $campId)
     {
         $carray = array(
 
@@ -621,7 +764,8 @@ class iSDK
      * @param int $aid
      * @return array
      */
-    public function runAS($cid, $aid)
+    public
+    function runAS($cid, $aid)
     {
         $carray = array(
 
@@ -638,7 +782,8 @@ class iSDK
      * @param int $userId
      * @return int|mixed|string
      */
-    public function applyActivityHistoryTemplate($contactId, $historyId, $userId)
+    public
+    function applyActivityHistoryTemplate($contactId, $historyId, $userId)
     {
         $carray = array(
 
@@ -653,7 +798,8 @@ class iSDK
      * @description get templates for use with applyActivityHistoryTemplate
      * @return array
      */
-    public function getActivityHistoryTemplateMap()
+    public
+    function getActivityHistoryTemplateMap()
     {
         $carray = array();
         return $this->methodCaller("ContactService.getActivityHistoryTemplateMap", $carray);
@@ -666,7 +812,8 @@ class iSDK
      * @param string $checkType - 'Email', 'EmailAndName', or 'EmailAndNameAnd Company'
      * @return int
      */
-    public function addWithDupCheck($cMap, $checkType)
+    public
+    function addWithDupCheck($cMap, $checkType)
     {
         $carray = array(
 
@@ -687,7 +834,8 @@ class iSDK
      * @param string $failureUrl
      * @return string
      */
-    public function requestCcSubmissionToken($contactId, $successUrl, $failureUrl)
+    public
+    function requestCcSubmissionToken($contactId, $successUrl, $failureUrl)
     {
         $carray = array(
 
@@ -703,7 +851,8 @@ class iSDK
      * @param $token
      * @return array
      */
-    public function requestCreditCardId($token)
+    public
+    function requestCreditCardId($token)
     {
         $carray = array(
 
@@ -722,7 +871,8 @@ class iSDK
      * @param string $setting
      * @return int|mixed|string
      */
-    public function dsGetSetting($module, $setting)
+    public
+    function dsGetSetting($module, $setting)
     {
         $carray = array(
             php_xmlrpc_encode($module),
@@ -737,7 +887,8 @@ class iSDK
      * @param array $iMap
      * @return int
      */
-    public function dsAdd($tName, $iMap)
+    public
+    function dsAdd($tName, $iMap)
     {
         $carray = array(
 
@@ -754,7 +905,8 @@ class iSDK
      * @param array $iMap
      * @return int
      */
-    public function dsAddWithImage($tName, $iMap)
+    public
+    function dsAddWithImage($tName, $iMap)
     {
         $carray = array(
 
@@ -771,7 +923,8 @@ class iSDK
      * @param int $id
      * @return bool
      */
-    public function dsDelete($tName, $id)
+    public
+    function dsDelete($tName, $id)
     {
         $carray = array(
 
@@ -789,7 +942,8 @@ class iSDK
      * @param array $iMap
      * @return int
      */
-    public function dsUpdate($tName, $id, $iMap)
+    public
+    function dsUpdate($tName, $id, $iMap)
     {
         $carray = array(
 
@@ -808,7 +962,8 @@ class iSDK
      * @param array $iMap
      * @return int
      */
-    public function dsUpdateWithImage($tName, $id, $iMap)
+    public
+    function dsUpdateWithImage($tName, $id, $iMap)
     {
         $carray = array(
 
@@ -827,7 +982,8 @@ class iSDK
      * @param array $rFields
      * @return array
      */
-    public function dsLoad($tName, $id, $rFields)
+    public
+    function dsLoad($tName, $id, $rFields)
     {
         $carray = array(
 
@@ -849,7 +1005,8 @@ class iSDK
      * @param array $rFields
      * @return array
      */
-    public function dsFind($tName, $limit, $page, $field, $value, $rFields)
+    public
+    function dsFind($tName, $limit, $page, $field, $value, $rFields)
     {
         $carray = array(
 
@@ -873,7 +1030,8 @@ class iSDK
      * @param array $rFields
      * @return array
      */
-    public function dsQuery($tName, $limit, $page, $query, $rFields)
+    public
+    function dsQuery($tName, $limit, $page, $query, $rFields)
     {
         $carray = array(
             php_xmlrpc_encode($tName),
@@ -897,7 +1055,8 @@ class iSDK
      * @param bool $ascending
      * @return array
      */
-    public function dsQueryOrderBy($tName, $limit, $page, $query, $rFields, $orderByField, $ascending = TRUE)
+    public
+    function dsQueryOrderBy($tName, $limit, $page, $query, $rFields, $orderByField, $ascending = TRUE)
     {
         $carray = array(
 
@@ -921,7 +1080,8 @@ class iSDK
      * @param int $headerID
      * @return int
      */
-    public function addCustomField($context, $displayName, $dataType, $headerID)
+    public
+    function addCustomField($context, $displayName, $dataType, $headerID)
     {
         $carray = array(
 
@@ -940,7 +1100,8 @@ class iSDK
      * @param string $password
      * @return int
      */
-    public function authenticateUser($userName, $password)
+    public
+    function authenticateUser($userName, $password)
     {
         $password = strtolower(md5($password));
         $carray = array(
@@ -958,7 +1119,8 @@ class iSDK
      * @param array $fieldValues
      * @return int
      */
-    public function updateCustomField($fieldId, $fieldValues)
+    public
+    function updateCustomField($fieldId, $fieldValues)
     {
         $carray = array(
 
@@ -981,7 +1143,8 @@ class iSDK
      * @param int $subscriptionPlanId
      * @return int
      */
-    public function addFreeTrial($name, $description, $freeTrialDays, $hidePrice, $subscriptionPlanId)
+    public
+    function addFreeTrial($name, $description, $freeTrialDays, $hidePrice, $subscriptionPlanId)
     {
         $carray = array(
 
@@ -999,7 +1162,8 @@ class iSDK
      * @param int $trialId
      * @return array
      */
-    public function getFreeTrial($trialId)
+    public
+    function getFreeTrial($trialId)
     {
         $carray = array(
 
@@ -1022,7 +1186,8 @@ class iSDK
      * @paramOption Net
      * @return int
      */
-    public function addOrderTotalDiscount($name, $description, $applyDiscountToCommission, $percentOrAmt, $amt, $payType)
+    public
+    function addOrderTotalDiscount($name, $description, $applyDiscountToCommission, $percentOrAmt, $amt, $payType)
     {
         $carray = array(
 
@@ -1041,7 +1206,8 @@ class iSDK
      * @param int $id
      * @return array
      */
-    public function getOrderTotalDiscount($id)
+    public
+    function getOrderTotalDiscount($id)
     {
         $carray = array(
 
@@ -1058,7 +1224,8 @@ class iSDK
      * @param double $amt
      * @return int
      */
-    public function addCategoryDiscount($name, $description, $applyDiscountToCommission, $amt)
+    public
+    function addCategoryDiscount($name, $description, $applyDiscountToCommission, $amt)
     {
         $carray = array(
 
@@ -1075,7 +1242,8 @@ class iSDK
      * @param int $id
      * @return array
      */
-    public function getCategoryDiscount($id)
+    public
+    function getCategoryDiscount($id)
     {
         $carray = array(
 
@@ -1090,7 +1258,8 @@ class iSDK
      * @param int $productCategoryId
      * @return int
      */
-    public function addCategoryAssignmentToCategoryDiscount($categoryDiscountId, $productCategoryId)
+    public
+    function addCategoryAssignmentToCategoryDiscount($categoryDiscountId, $productCategoryId)
     {
         $carray = array(
 
@@ -1105,7 +1274,8 @@ class iSDK
      * @param int $id
      * @return array
      */
-    public function getCategoryAssignmentsForCategoryDiscount($id)
+    public
+    function getCategoryAssignmentsForCategoryDiscount($id)
     {
         $carray = array(
 
@@ -1126,7 +1296,8 @@ class iSDK
      * @param double $amt
      * @return int
      */
-    public function addProductTotalDiscount($name, $description, $applyDiscountToCommission, $productId, $percentOrAmt, $amt)
+    public
+    function addProductTotalDiscount($name, $description, $applyDiscountToCommission, $productId, $percentOrAmt, $amt)
     {
         $carray = array(
 
@@ -1145,7 +1316,8 @@ class iSDK
      * @param int $id
      * @return array
      */
-    public function getProductTotalDiscount($id)
+    public
+    function getProductTotalDiscount($id)
     {
         $carray = array(
 
@@ -1165,7 +1337,8 @@ class iSDK
      * @param double $amt
      * @return int
      */
-    public function addShippingTotalDiscount($name, $description, $applyDiscountToCommission, $percentOrAmt, $amt)
+    public
+    function addShippingTotalDiscount($name, $description, $applyDiscountToCommission, $percentOrAmt, $amt)
     {
         $carray = array(
 
@@ -1183,7 +1356,8 @@ class iSDK
      * @param int $id
      * @return array
      */
-    public function getShippingTotalDiscount($id)
+    public
+    function getShippingTotalDiscount($id)
     {
         $carray = array(
 
@@ -1214,9 +1388,10 @@ class iSDK
      * @param int $emailSentType
      * @return bool
      */
-    public function attachEmail($cId, $fromName, $fromAddress, $toAddress, $ccAddresses,
-                                $bccAddresses, $contentType, $subject, $htmlBody, $txtBody,
-                                $header, $strRecvdDate, $strSentDate, $emailSentType = 1)
+    public
+    function attachEmail($cId, $fromName, $fromAddress, $toAddress, $ccAddresses,
+                         $bccAddresses, $contentType, $subject, $htmlBody, $txtBody,
+                         $header, $strRecvdDate, $strSentDate, $emailSentType = 1)
     {
         $carray = array(
 
@@ -1243,7 +1418,8 @@ class iSDK
      * @param string $mergeContext
      * @return array
      */
-    public function getAvailableMergeFields($mergeContext)
+    public
+    function getAvailableMergeFields($mergeContext)
     {
         $carray = array(
 
@@ -1265,7 +1441,8 @@ class iSDK
      * @param string $txtBody
      * @return bool
      */
-    public function sendEmail($conList, $fromAddress, $toAddress, $ccAddresses, $bccAddresses, $contentType, $subject, $htmlBody, $txtBody)
+    public
+    function sendEmail($conList, $fromAddress, $toAddress, $ccAddresses, $bccAddresses, $contentType, $subject, $htmlBody, $txtBody)
     {
         $carray = array(
 
@@ -1290,7 +1467,8 @@ class iSDK
      * @param int $template
      * @return bool
      */
-    public function sendTemplate($conList, $template)
+    public
+    function sendTemplate($conList, $template)
     {
         $carray = array(
 
@@ -1315,8 +1493,9 @@ class iSDK
      * @param string $txtBody
      * @return int
      */
-    public function createEmailTemplate($title, $userID, $fromAddress, $toAddress, $ccAddresses, $bccAddresses, $contentType, $subject, $htmlBody,
-                                        $txtBody)
+    public
+    function createEmailTemplate($title, $userID, $fromAddress, $toAddress, $ccAddresses, $bccAddresses, $contentType, $subject, $htmlBody,
+                                 $txtBody)
     {
         $carray = array(
 
@@ -1350,7 +1529,8 @@ class iSDK
      * @param string $mergeContext
      * @return int
      */
-    public function addEmailTemplate($title, $category, $fromAddress, $toAddress, $ccAddresses, $bccAddresses, $subject, $txtBody, $htmlBody, $contentType, $mergeContext)
+    public
+    function addEmailTemplate($title, $category, $fromAddress, $toAddress, $ccAddresses, $bccAddresses, $subject, $txtBody, $htmlBody, $contentType, $mergeContext)
     {
         $carray = array(
 
@@ -1374,7 +1554,8 @@ class iSDK
      * @param int $templateId
      * @return array
      */
-    public function getEmailTemplate($templateId)
+    public
+    function getEmailTemplate($templateId)
     {
         $carray = array(
             php_xmlrpc_encode((int)$templateId));
@@ -1398,7 +1579,8 @@ class iSDK
      * @param string $mergeContext
      * @return bool
      */
-    public function updateEmailTemplate($templateID, $title, $categories, $fromAddress, $toAddress, $ccAddress, $bccAddress, $subject, $textBody, $htmlBody, $contentType, $mergeContext)
+    public
+    function updateEmailTemplate($templateID, $title, $categories, $fromAddress, $toAddress, $ccAddress, $bccAddress, $subject, $textBody, $htmlBody, $contentType, $mergeContext)
     {
         $carray = array(
             php_xmlrpc_encode((int)$templateID),
@@ -1422,7 +1604,8 @@ class iSDK
      * @param string $email
      * @return int
      */
-    public function optStatus($email)
+    public
+    function optStatus($email)
     {
         $carray = array(
 
@@ -1438,7 +1621,8 @@ class iSDK
      * @param string $reason
      * @return bool
      */
-    public function optIn($email, $reason = 'Contact Was Opted In through the API')
+    public
+    function optIn($email, $reason = 'Contact Was Opted In through the API')
     {
         $carray = array(
 
@@ -1454,7 +1638,8 @@ class iSDK
      * @param string $reason
      * @return bool
      */
-    public function optOut($email, $reason = 'Contact Was Opted Out through the API')
+    public
+    function optOut($email, $reason = 'Contact Was Opted Out through the API')
     {
         $carray = array(
 
@@ -1473,7 +1658,8 @@ class iSDK
      * @param int $fileID
      * @return base64 encoded file data
      */
-    public function getFile($fileID)
+    public
+    function getFile($fileID)
     {
 
         $carray = array(
@@ -1491,7 +1677,8 @@ class iSDK
      * @param int $cid
      * @return int|mixed|string
      */
-    public function uploadFile($fileName, $base64Enc, $cid = 0)
+    public
+    function uploadFile($fileName, $base64Enc, $cid = 0)
     {
         $result = 0;
         if ($cid == 0) {
@@ -1518,7 +1705,8 @@ class iSDK
      * @param string $base64Enc
      * @return bool
      */
-    public function replaceFile($fileID, $base64Enc)
+    public
+    function replaceFile($fileID, $base64Enc)
     {
         $carray = array(
 
@@ -1535,7 +1723,8 @@ class iSDK
      * @param string $fileName
      * @return bool
      */
-    public function renameFile($fileID, $fileName)
+    public
+    function renameFile($fileID, $fileName)
     {
         $carray = array(
 
@@ -1551,7 +1740,8 @@ class iSDK
      * @param int $fileID
      * @return string
      */
-    public function getDownloadUrl($fileID)
+    public
+    function getDownloadUrl($fileID)
     {
         $carray = array(
 
@@ -1572,7 +1762,8 @@ class iSDK
      * @param int $contactId
      * @return array
      */
-    public function achieveGoal($integration, $callName, $contactId)
+    public
+    function achieveGoal($integration, $callName, $contactId)
     {
         $carray = array(
 
@@ -1592,7 +1783,8 @@ class iSDK
      * @param int $Id
      * @return bool
      */
-    public function deleteInvoice($Id)
+    public
+    function deleteInvoice($Id)
     {
         $carray = array(
 
@@ -1606,7 +1798,8 @@ class iSDK
      * @param $Id
      * @return bool
      */
-    public function deleteSubscription($Id)
+    public
+    function deleteSubscription($Id)
     {
         $carray = array(
 
@@ -1620,7 +1813,8 @@ class iSDK
      * @param $Id
      * @return array
      */
-    public function getPayments($Id)
+    public
+    function getPayments($Id)
     {
         $carray = array(
 
@@ -1635,7 +1829,8 @@ class iSDK
      * @param $syncStatus
      * @return bool
      */
-    public function setInvoiceSyncStatus($Id, $syncStatus)
+    public
+    function setInvoiceSyncStatus($Id, $syncStatus)
     {
         $carray = array(
 
@@ -1651,7 +1846,8 @@ class iSDK
      * @param $Status
      * @return bool
      */
-    public function setPaymentSyncStatus($Id, $Status)
+    public
+    function setPaymentSyncStatus($Id, $Status)
     {
         $carray = array(
 
@@ -1666,7 +1862,8 @@ class iSDK
      * @param string $className
      * @return bool
      */
-    public function getPluginStatus($className)
+    public
+    function getPluginStatus($className)
     {
         $carray = array(
 
@@ -1679,7 +1876,8 @@ class iSDK
      * @description get a list of all Payment Options
      * @return array
      */
-    public function getAllPaymentOptions()
+    public
+    function getAllPaymentOptions()
     {
         $carray = array();
         return $this->methodCaller("InvoiceService.getAllPaymentOptions", $carray);
@@ -1697,7 +1895,8 @@ class iSDK
      * @param bool $bypassComm
      * @return int
      */
-    public function manualPmt($invId, $amt, $payDate, $payType, $payDesc, $bypassComm)
+    public
+    function manualPmt($invId, $amt, $payDate, $payType, $payDesc, $bypassComm)
     {
         $carray = array(
 
@@ -1723,7 +1922,8 @@ class iSDK
      * @param date $date
      * @return bool
      */
-    public function commOverride($invId, $affId, $prodId, $percentage, $amt, $payType, $desc, $date)
+    public
+    function commOverride($invId, $affId, $prodId, $percentage, $amt, $payType, $desc, $date)
     {
         $carray = array(
 
@@ -1764,7 +1964,8 @@ class iSDK
      * @param string $notes
      * @return bool
      */
-    public function addOrderItem($ordId, $prodId, $type, $price, $qty, $desc, $notes)
+    public
+    function addOrderItem($ordId, $prodId, $type, $price, $qty, $desc, $notes)
     {
         $carray = array(
 
@@ -1795,7 +1996,8 @@ class iSDK
      * @param int $pmtDays
      * @return bool
      */
-    public function payPlan($ordId, $aCharge, $ccId, $merchId, $retry, $retryAmt, $initialPmt, $initialPmtDate, $planStartDate, $numPmts, $pmtDays)
+    public
+    function payPlan($ordId, $aCharge, $ccId, $merchId, $retry, $retryAmt, $initialPmt, $initialPmtDate, $planStartDate, $numPmts, $pmtDays)
     {
         $carray = array(
 
@@ -1825,7 +2027,8 @@ class iSDK
      * @param  int $daysToCharge
      * @return int
      */
-    public function addRecurring($cid, $allowDup, $progId, $merchId, $ccId, $affId, $daysToCharge)
+    public
+    function addRecurring($cid, $allowDup, $progId, $merchId, $ccId, $affId, $daysToCharge)
     {
         $carray = array(
 
@@ -1855,7 +2058,8 @@ class iSDK
      * @param int $daysToCharge
      * @return int
      */
-    public function addRecurringAdv($cid, $allowDup, $progId, $qty, $price, $allowTax, $merchId, $ccId, $affId, $daysToCharge)
+    public
+    function addRecurringAdv($cid, $allowDup, $progId, $qty, $price, $allowTax, $merchId, $ccId, $affId, $daysToCharge)
     {
         $carray = array(
 
@@ -1878,7 +2082,8 @@ class iSDK
      * @param int $invId
      * @return double
      */
-    public function amtOwed($invId)
+    public
+    function amtOwed($invId)
     {
         $carray = array(
 
@@ -1892,7 +2097,8 @@ class iSDK
      * @param int $orderId
      * @return int
      */
-    public function getInvoiceId($orderId)
+    public
+    function getInvoiceId($orderId)
     {
         $carray = array(
 
@@ -1906,7 +2112,8 @@ class iSDK
      * @param int $invoiceId
      * @return int
      */
-    public function getOrderId($invoiceId)
+    public
+    function getOrderId($invoiceId)
     {
         $carray = array(
 
@@ -1924,7 +2131,8 @@ class iSDK
      * @param bool $bypassComm
      * @return array
      */
-    public function chargeInvoice($invId, $notes, $ccId, $merchId, $bypassComm)
+    public
+    function chargeInvoice($invId, $notes, $ccId, $merchId, $bypassComm)
     {
         $carray = array(
 
@@ -1946,7 +2154,8 @@ class iSDK
      * @param int $saleAff
      * @return int
      */
-    public function blankOrder($conId, $desc, $oDate, $leadAff, $saleAff)
+    public
+    function blankOrder($conId, $desc, $oDate, $leadAff, $saleAff)
     {
         $carray = array(
 
@@ -1964,7 +2173,8 @@ class iSDK
      * @param int $rid
      * @return int
      */
-    public function recurringInvoice($rid)
+    public
+    function recurringInvoice($rid)
     {
         $carray = array(
 
@@ -1979,7 +2189,8 @@ class iSDK
      * @param string $last4
      * @return int
      */
-    public function locateCard($cid, $last4)
+    public
+    function locateCard($cid, $last4)
     {
         $carray = array(
 
@@ -1995,7 +2206,8 @@ class iSDK
      * @param mixed $creditCard
      * @return int
      */
-    public function validateCard($creditCard)
+    public
+    function validateCard($creditCard)
     {
         $creditCard = is_array($creditCard) ? $creditCard : (int)$creditCard;
 
@@ -2012,7 +2224,8 @@ class iSDK
      * @param date $nextBillDate
      * @return bool
      */
-    public function updateSubscriptionNextBillDate($subscriptionId, $nextBillDate)
+    public
+    function updateSubscriptionNextBillDate($subscriptionId, $nextBillDate)
     {
         $carray = array(
 
@@ -2027,7 +2240,8 @@ class iSDK
      * @param $invoiceId
      * @return bool
      */
-    public function recalculateTax($invoiceId)
+    public
+    function recalculateTax($invoiceId)
     {
         $carray = array(
 
@@ -2045,7 +2259,8 @@ class iSDK
      * @param $dateStr
      * @return bool|string
      */
-    public function infuDate($dateStr)
+    public
+    function infuDate($dateStr)
     {
         $dArray = date_parse($dateStr);
         if ($dArray['error_count'] < 1) {
@@ -2066,7 +2281,8 @@ class iSDK
      * @description Function to Enable/Disable Logging
      * @param int $log
      */
-    public function enableLogging($log)
+    public
+    function enableLogging($log)
     {
         $this->loggingEnabled = $log;
     }
@@ -2626,6 +2842,15 @@ class iSDK
     {
         $carray = array();
         return $this->methodCaller("WebTrackingService.getWebTrackingScriptUrl", $carray);
+    }
+
+    public function dsCount($tName, $query)
+    {
+        $carray = array(
+            php_xmlrpc_encode($tName),
+            php_xmlrpc_encode($query, array('auto_dates'))
+        );
+        return $this->methodCaller("DataService.count", $carray);
     }
 
 }
