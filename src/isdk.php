@@ -254,6 +254,7 @@ class iSDK
 
         /* SSL Certificate Verification */
         $this->client->setSSLVerifyPeer(TRUE);
+        $this->client->setSSLVerifyHost(2);
         $this->client->setCaCertificate((__DIR__ != '__DIR__' ? __DIR__ : dirname(__FILE__)) . '/infusionsoft.pem');
         $this->client->setDebug(0);
 
