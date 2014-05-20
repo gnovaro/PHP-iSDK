@@ -2325,18 +2325,12 @@ class iSDK
             $this->getHandle($logname);
         }
 
-        echo "<pre>";
-        //print_r($logdata['Call']);
-        echo "</pre>";
-        echo "<br />";
-
         if (isset($logdata['Call'][0]->me['string'])) {
             if ($logdata['Call'][0]->me['string'] == 'CreditCard') {
                 unset($logdata['Call'][1]->me['struct']);
                 $logdata['Call'][1]->me['struct'] = 'Data Removed For Security';
             }
         }
-
 
         $logdata['Call'][0]->me['string'] = 'APIKEY';
 
